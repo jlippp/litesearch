@@ -29,7 +29,7 @@ def detect_device_and_dtype():
     dtype = torch.bfloat16 if use_bf16 else torch.float32
     device = torch.device("cuda")
     gpu_name = torch.cuda.get_device_name(0)
-    vram_mb = torch.cuda.get_device_properties(0).total_mem / 1024 / 1024
+    vram_mb = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
     print(f"GPU: {gpu_name} ({vram_mb:.0f} MB)")
     print(f"Compute capability: {cap[0]}.{cap[1]}")
     print(f"Dtype: {'bfloat16' if use_bf16 else 'float32 (Pascal fallback)'}")
@@ -242,7 +242,7 @@ class GPT(nn.Module):
         }
 
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
-                        weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
+                        weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5, use_bf16=True):
         model_dim = self.config.n_embd
         matrix_params = list(self.transformer.h.parameters())
         value_embeds_params = list(self.value_embeds.parameters())
@@ -267,7 +267,7 @@ class GPT(nn.Module):
                 kind='muon', params=group_params, lr=matrix_lr,
                 momentum=0.95, ns_steps=5, beta2=0.95, weight_decay=weight_decay,
             ))
-        optimizer = MuonAdamW(param_groups)
+        optimizer = MuonAdamW(param_groups, use_bf16=use_bf16)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
         return optimizer
@@ -323,11 +323,11 @@ def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_
 
 
 def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
-                    momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
+                    momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim, use_bf16=True):
     momentum = momentum_t.to(stacked_grads.dtype)
     momentum_buffer.lerp_(stacked_grads, 1 - momentum)
     g = stacked_grads.lerp_(momentum_buffer, momentum)
-    X = g.bfloat16()
+    X = g.bfloat16() if use_bf16 else g.float()
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
     if g.size(-2) > g.size(-1):
         for a, b, c in polar_express_coeffs[:ns_steps]:
@@ -360,8 +360,9 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
 class MuonAdamW(torch.optim.Optimizer):
     """Muon for 2D matrix params, AdamW for everything else."""
 
-    def __init__(self, param_groups):
+    def __init__(self, param_groups, use_bf16=True):
         super().__init__(param_groups, defaults={})
+        self.use_bf16 = use_bf16
         # 0-D CPU tensors to avoid torch.compile recompilation
         self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
@@ -418,7 +419,7 @@ class MuonAdamW(torch.optim.Optimizer):
         muon_step_fused(stacked_grads, stacked_params,
                         state["momentum_buffer"], state["second_momentum_buffer"],
                         self._muon_momentum_t, self._muon_lr_t, self._muon_wd_t,
-                        self._muon_beta2_t, group["ns_steps"], red_dim)
+                        self._muon_beta2_t, group["ns_steps"], red_dim, self.use_bf16)
         for param, updated in zip(params, stacked_params.unbind(0)):
             param.data.copy_(updated.data)
 
@@ -467,8 +468,10 @@ def estimate_model_memory_mb(depth, n_embd, vocab_size, use_bf16):
 
 
 def compute_optimal_config(vram_mb, use_bf16, vocab_size):
-    budget = vram_mb * 0.80 - 200
-    budget = max(budget, 512)
+    # Reserve 800MB for desktop/OS, use 50% of remainder
+    # Actual peak VRAM ~1.8x estimate due to CUDA allocator + fragmentation
+    budget = (vram_mb - 800) * 0.50
+    budget = max(budget, 400)
 
     for depth, _ in _CONFIG_CANDIDATES:
         base_dim = depth * ASPECT_RATIO
@@ -488,11 +491,11 @@ def compute_optimal_config(vram_mb, use_bf16, vocab_size):
                 layer_act_mb = B * T * n_embd * act_bytes / 1e6
                 total_act_mb = logits_mb + layer_act_mb + 50
 
-                est = model_total_mb + total_act_mb
-                if total_act_mb < act_budget and est < vram_mb * 0.70:
+                if total_act_mb < act_budget:
                     tokens_per_step = B * T
                     total_batch = max(2**14, tokens_per_step)
                     total_batch = ((total_batch + tokens_per_step - 1) // tokens_per_step) * tokens_per_step
+                    est = model_total_mb + total_act_mb
                     pm = total_params / 1e6
                     print(f"Auto-config: depth={depth}, n_embd={n_embd}, B={B}, T={T}, "
                           f"params={pm:.1f}M, est={est:.0f}MB / {vram_mb:.0f}MB")
@@ -621,13 +624,17 @@ def run_training(config=None, lr_override=None, log_queue=None, stop_event=None)
         adam_betas=ADAM_BETAS,
         matrix_lr=matrix_lr,
         weight_decay=WEIGHT_DECAY,
+        use_bf16=use_bf16,
     )
 
-    try:
-        model = torch.compile(model, dynamic=False)
-        log("torch.compile enabled")
-    except Exception as e:
-        log(f"torch.compile unavailable ({e}), running eager mode")
+    if cap[0] >= 7:
+        try:
+            model = torch.compile(model, dynamic=False)
+            log("torch.compile enabled")
+        except Exception as e:
+            log(f"torch.compile failed ({e}), running eager mode")
+    else:
+        log("torch.compile skipped (GPU too old for Triton)")
 
     from prepare import make_dataloader as _make_dataloader
     train_loader = _make_dataloader(tokenizer, device_batch_size, max_seq_len, "train")
@@ -729,8 +736,15 @@ def run_training(config=None, lr_override=None, log_queue=None, stop_event=None)
         try:
             model.eval()
             with autocast_ctx:
-                from prepare import evaluate_bpb as _evaluate_bpb
-                val_bpb = _evaluate_bpb(model, tokenizer, device_batch_size)
+                import prepare
+                # Scale eval steps: ~30 for 4GB, ~50 for 8GB, ~80 for 24GB
+                eval_steps = max(30, min(int(vram_total_mb / 100), 100))
+                cap_tokens = eval_steps * device_batch_size * max_seq_len
+                old_eval = prepare.EVAL_TOKENS
+                prepare.EVAL_TOKENS = min(old_eval, cap_tokens)
+                log(f"Evaluating ({eval_steps} steps)...")
+                val_bpb = evaluate_bpb(model, tokenizer, device_batch_size)
+                prepare.EVAL_TOKENS = old_eval
         except Exception as e:
             log(f"Evaluation failed: {e}")
             crashed = True

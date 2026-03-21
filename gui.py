@@ -21,7 +21,7 @@ def detect_gpu():
     if not torch.cuda.is_available():
         return None, 0, 0, (0, 0), False
     name = torch.cuda.get_device_name(0)
-    vram_mb = torch.cuda.get_device_properties(0).total_mem / 1024 / 1024
+    vram_mb = torch.cuda.get_device_properties(0).total_memory / 1024 / 1024
     vram_gb = vram_mb / 1024
     cap = torch.cuda.get_device_capability()
     use_bf16 = cap >= (7, 5)
