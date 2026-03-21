@@ -71,7 +71,6 @@ class LitesearchApp(ctk.CTk):
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(3, weight=1)
 
-        # --- Header ---
         header = ctk.CTkFrame(root, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(1, weight=1)
@@ -81,7 +80,6 @@ class LitesearchApp(ctk.CTk):
         ctk.CTkLabel(header, text=f"{self.gpu_name}  •  {self.gpu_vram_gb:.1f} GB  •  {dtype_str}",
                      font=FONT_SM, text_color="#888888").grid(row=0, column=1, sticky="e")
 
-        # --- Controls ---
         ctrl = ctk.CTkFrame(root)
         ctrl.grid(row=1, column=0, sticky="ew", **PAD)
         ctrl.grid_columnconfigure(1, weight=1)
@@ -100,7 +98,6 @@ class LitesearchApp(ctk.CTk):
         self.lr_lbl = ctk.CTkLabel(ctrl, text=f"{self.lr_var.get():.3f}", font=FONT_LG, text_color="#4fc3f7", width=60)
         self.lr_lbl.grid(row=1, column=2, padx=(6, 12), pady=6)
 
-        # --- Config + buttons ---
         bot = ctk.CTkFrame(root)
         bot.grid(row=2, column=0, sticky="ew", pady=(0, 4))
         bot.grid_columnconfigure(0, weight=1)
@@ -124,7 +121,6 @@ class LitesearchApp(ctk.CTk):
         self.status_lbl = ctk.CTkLabel(btnrow, text="Ready", font=FONT_SM, text_color="#888888")
         self.status_lbl.pack(side="right")
 
-        # --- VRAM bar ---
         vbar = ctk.CTkFrame(bot, fg_color="transparent")
         vbar.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
         vbar.grid_columnconfigure(1, weight=1)
@@ -136,7 +132,6 @@ class LitesearchApp(ctk.CTk):
         self.vram_txt = ctk.CTkLabel(vbar, text="", font=FONT_SM, text_color="#888888", width=100)
         self.vram_txt.grid(row=0, column=2, padx=(6, 0))
 
-        # --- Terminal ---
         term_frame = ctk.CTkFrame(root)
         term_frame.grid(row=3, column=0, sticky="nsew")
         term_frame.grid_columnconfigure(0, weight=1)

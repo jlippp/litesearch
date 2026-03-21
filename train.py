@@ -62,10 +62,6 @@ def get_peak_flops(cap, use_bf16):
     return 15.0e12
 
 
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
 @dataclass
 class GPTConfig:
     sequence_len: int = 2048
@@ -298,10 +294,6 @@ class GPT(nn.Module):
         return logits
 
 
-# ---------------------------------------------------------------------------
-# Optimizer
-# ---------------------------------------------------------------------------
-
 polar_express_coeffs = [
     (8.156554524902461, -22.48329292557795, 15.878769915207462),
     (4.042929935166739, -2.808917465908714, 0.5000178451051316),
@@ -436,10 +428,6 @@ class MuonAdamW(torch.optim.Optimizer):
                 raise
 
 
-# ---------------------------------------------------------------------------
-# VRAM auto-scaling
-# ---------------------------------------------------------------------------
-
 ASPECT_RATIO = 64
 HEAD_DIM = 128
 
@@ -513,10 +501,6 @@ def compute_optimal_config(vram_mb, use_bf16, vocab_size):
     }
 
 
-# ---------------------------------------------------------------------------
-# Hyperparameters
-# ---------------------------------------------------------------------------
-
 TOTAL_BATCH_SIZE = 2**19
 EMBEDDING_LR = 0.6
 UNEMBEDDING_LR = 0.004
@@ -547,10 +531,6 @@ def get_muon_momentum(step):
 def get_weight_decay(progress):
     return WEIGHT_DECAY * (1 - progress)
 
-
-# ---------------------------------------------------------------------------
-# Training
-# ---------------------------------------------------------------------------
 
 def run_training(config=None, lr_override=None, log_queue=None, stop_event=None):
     def log(msg, end="\n"):
@@ -737,7 +717,6 @@ def run_training(config=None, lr_override=None, log_queue=None, stop_event=None)
             model.eval()
             with autocast_ctx:
                 import prepare
-                # Scale eval steps: ~30 for 4GB, ~50 for 8GB, ~80 for 24GB
                 eval_steps = max(30, min(int(vram_total_mb / 100), 100))
                 cap_tokens = eval_steps * device_batch_size * max_seq_len
                 old_eval = prepare.EVAL_TOKENS
