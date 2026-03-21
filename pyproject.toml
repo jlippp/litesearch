@@ -1,11 +1,11 @@
 [project]
-name = "autoresearch"
+name = "litesearch"
 version = "0.1.0"
-description = "Autonomous pretraining research swarm"
+description = "Autonomous pretraining research for consumer GPUs"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "kernels>=0.11.7",
+    "customtkinter>=5.2.0",
     "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
