@@ -24,7 +24,7 @@ import tiktoken
 import torch
 
 # ---------------------------------------------------------------------------
-# Constants (fixed, do not modify)
+# Constants
 # ---------------------------------------------------------------------------
 
 MAX_SEQ_LEN = 2048       # context length
@@ -154,7 +154,6 @@ def train_tokenizer():
         print("Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first.")
         sys.exit(1)
 
-    # --- Train with rustbpe ---
     print("Tokenizer: training BPE tokenizer...")
     t0 = time.time()
 
@@ -174,14 +173,12 @@ def train_tokenizer():
         special_tokens=special_tokens,
     )
 
-    # Save tokenizer
     with open(tokenizer_pkl, "wb") as f:
         pickle.dump(enc, f)
 
     t1 = time.time()
     print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
 
-    # --- Build token_bytes lookup for BPB evaluation ---
     print("Tokenizer: building token_bytes lookup...")
     special_set = set(SPECIAL_TOKENS)
     token_bytes_list = []
@@ -194,8 +191,7 @@ def train_tokenizer():
     token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
     torch.save(token_bytes_tensor, token_bytes_path)
     print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
-
-    # Sanity check
+    
     test = "Hello world! Numbers: 123. Unicode: 你好"
     encoded = enc.encode_ordinary(test)
     decoded = enc.decode(encoded)
@@ -203,7 +199,7 @@ def train_tokenizer():
     print(f"Tokenizer: sanity check passed (vocab_size={enc.n_vocab})")
 
 # ---------------------------------------------------------------------------
-# Runtime utilities (imported by train.py)
+# Runtime utilities
 # ---------------------------------------------------------------------------
 
 class Tokenizer:
@@ -293,7 +289,6 @@ def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
         token_lists = tokenizer.encode(doc_batch, prepend=bos_token)
         doc_buffer.extend(token_lists)
 
-    # Pre-allocate buffers: [inputs (B*T) | targets (B*T)]
     row_buffer = torch.empty((B, row_capacity), dtype=torch.long)
     cpu_buffer = torch.empty(2 * B * T, dtype=torch.long, pin_memory=True)
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -326,7 +321,6 @@ def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
                     row_buffer[row_idx, pos:pos + len(doc)] = torch.tensor(doc, dtype=torch.long)
                     pos += len(doc)
                 else:
-                    # No doc fits — crop shortest to fill remaining
                     shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
                     doc = doc_buffer.pop(shortest_idx)
                     row_buffer[row_idx, pos:pos + remaining] = torch.tensor(doc[:remaining], dtype=torch.long)
@@ -338,7 +332,7 @@ def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
         yield inputs, targets, epoch
 
 # ---------------------------------------------------------------------------
-# Evaluation (DO NOT CHANGE — this is the fixed metric)
+# Evaluation
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -381,11 +375,9 @@ if __name__ == "__main__":
     print(f"Cache directory: {CACHE_DIR}")
     print()
 
-    # Step 1: Download data
     download_data(num_shards, download_workers=args.download_workers)
     print()
 
-    # Step 2: Train tokenizer
     train_tokenizer()
     print()
     print("Done! Ready to train.")
