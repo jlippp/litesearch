@@ -425,10 +425,14 @@ class MuonAdamW(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self):
         for group in self.param_groups:
-            if group['kind'] == 'adamw':
-                self._step_adamw(group)
-            elif group['kind'] == 'muon':
-                self._step_muon(group)
+            try:
+                if group['kind'] == 'adamw':
+                    self._step_adamw(group)
+                elif group['kind'] == 'muon':
+                    self._step_muon(group)
+            except Exception as e:
+                print(f"Optimizer step error ({group['kind']}): {e}")
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -463,18 +467,8 @@ def estimate_model_memory_mb(depth, n_embd, vocab_size, use_bf16):
 
 
 def compute_optimal_config(vram_mb, use_bf16, vocab_size):
-    """
-    Find the largest model that fits in the given VRAM budget.
-    Always leaves 800MB safety buffer for the OS.
-    """
-    safety = 800
-    available = vram_mb - safety
-    cuda_overhead = 300
-    misc_buffers = 50
-    usable = available - cuda_overhead - misc_buffers
-
-    if usable < 200:
-        print(f"WARNING: Very low VRAM ({vram_mb:.0f} MB total, {usable:.0f} MB usable).")
+    budget = vram_mb * 0.80 - 200
+    budget = max(budget, 512)
 
     for depth, _ in _CONFIG_CANDIDATES:
         base_dim = depth * ASPECT_RATIO
@@ -483,8 +477,8 @@ def compute_optimal_config(vram_mb, use_bf16, vocab_size):
 
         model_total_mb, total_params = estimate_model_memory_mb(depth, n_embd, vocab_size, use_bf16)
 
-        act_budget = usable - model_total_mb
-        if act_budget < 128:
+        act_budget = budget - model_total_mb
+        if act_budget < 64:
             continue
 
         for T in [2048, 1024, 768, 512, 384, 256]:
@@ -492,29 +486,27 @@ def compute_optimal_config(vram_mb, use_bf16, vocab_size):
                 logits_mb = B * T * vocab_size * 4 / 1e6
                 act_bytes = 2 if use_bf16 else 4
                 layer_act_mb = B * T * n_embd * act_bytes / 1e6
-                misc_act = 100
-                total_act_mb = logits_mb + layer_act_mb + misc_act
+                total_act_mb = logits_mb + layer_act_mb + 50
 
-                if total_act_mb < act_budget:
+                est = model_total_mb + total_act_mb
+                if total_act_mb < act_budget and est < vram_mb * 0.70:
                     tokens_per_step = B * T
-                    min_total = max(2**14, tokens_per_step)
-                    total_batch = ((min_total + tokens_per_step - 1) // tokens_per_step) * tokens_per_step
-
-                    est_total = model_total_mb + total_act_mb
-                    num_params_M = total_params / 1e6
+                    total_batch = max(2**14, tokens_per_step)
+                    total_batch = ((total_batch + tokens_per_step - 1) // tokens_per_step) * tokens_per_step
+                    pm = total_params / 1e6
                     print(f"Auto-config: depth={depth}, n_embd={n_embd}, B={B}, T={T}, "
-                          f"params={num_params_M:.1f}M, est_vram={est_total:.0f}MB / {vram_mb:.0f}MB")
+                          f"params={pm:.1f}M, est={est:.0f}MB / {vram_mb:.0f}MB")
                     return {
                         'depth': depth, 'n_embd': n_embd, 'n_head': n_head, 'n_kv_head': n_head,
                         'device_batch_size': B, 'max_seq_len': T,
-                        'total_batch_size': total_batch, 'estimated_vram_mb': est_total,
+                        'total_batch_size': total_batch, 'estimated_vram_mb': est,
                     }
 
     print("WARNING: Using absolute minimum config (2 layers, 128 dim, B=1, T=256)")
     return {
         'depth': 2, 'n_embd': 128, 'n_head': 1, 'n_kv_head': 1,
         'device_batch_size': 1, 'max_seq_len': 256,
-        'total_batch_size': 2**14, 'estimated_vram_mb': 400,
+        'total_batch_size': 2**14, 'estimated_vram_mb': 300,
     }
 
 

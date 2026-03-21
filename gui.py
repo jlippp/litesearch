@@ -1,26 +1,18 @@
 """
-Litesearch GUI — CustomTkinter dashboard for autonomous research on consumer GPUs.
+Litesearch GUI — CustomTkinter dashboard for consumer GPU research.
 Usage: python gui.py
 """
 
 import os
-import sys
 import threading
 import queue
-import time
 import subprocess
 
 import customtkinter as ctk
 
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
 
-VRAM_MIN = 2.0
-VRAM_MAX = 32.0
-LR_MIN = 0.001
-LR_MAX = 0.5
-POLL_INTERVAL_MS = 100
-MAX_LOG_LINES = 500
 RESULTS_FILE = "results.tsv"
 
 
@@ -39,10 +31,9 @@ def detect_gpu():
 class LitesearchApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-
-        self.title("Litesearch — Autonomous Research for Consumer GPUs")
-        self.geometry("900x700")
-        self.minsize(800, 600)
+        self.title("Litesearch")
+        self.geometry("960x640")
+        self.minsize(700, 500)
 
         self.training_thread = None
         self.stop_event = None
@@ -53,164 +44,157 @@ class LitesearchApp(ctk.CTk):
 
         self.gpu_name, self.gpu_vram_gb, self.gpu_vram_mb, self.gpu_cap, self.use_bf16 = detect_gpu()
         if self.gpu_name is None:
-            self._show_no_gpu_error()
+            self._show_no_gpu()
             return
 
-        self.vram_var = ctk.DoubleVar(value=min(self.gpu_vram_gb, VRAM_MAX))
-        self._build_ui()
-        self._update_config_preview()
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    def _show_no_gpu_error(self):
-        self.geometry("500x200")
-        label = ctk.CTkLabel(
-            self,
-            text="No CUDA GPU detected.\n\nLitesearch requires an NVIDIA GPU.\nPlease check your drivers and CUDA installation.",
-            font=("JetBrains Mono", 14),
-            text_color="#ff6b6b",
-        )
-        label.pack(expand=True, padx=20, pady=20)
-
-    def _build_ui(self):
-        main = ctk.CTkFrame(self, fg_color="transparent")
-        main.pack(fill="both", expand=True, padx=16, pady=16)
-        main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(4, weight=1)
-
-        title = ctk.CTkLabel(main, text="Litesearch", font=("JetBrains Mono", 24, "bold"), text_color="#4fc3f7")
-        title.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        subtitle = ctk.CTkLabel(main, text="Autonomous Research for Consumer GPUs", font=("JetBrains Mono", 12), text_color="#888888")
-        subtitle.grid(row=0, column=0, sticky="w", pady=(32, 0))
-
-        dtype_str = "bfloat16" if self.use_bf16 else "float32"
-        gpu_info = ctk.CTkLabel(main, text=f"GPU: {self.gpu_name} ({self.gpu_vram_gb:.1f} GB) | {dtype_str}", font=("JetBrains Mono", 11), text_color="#aaaaaa")
-        gpu_info.grid(row=0, column=0, sticky="e", pady=(0, 0))
-
-        # Sliders
-        slider_frame = ctk.CTkFrame(main)
-        slider_frame.grid(row=1, column=0, sticky="ew", pady=(8, 8))
-        slider_frame.grid_columnconfigure(1, weight=1)
-
-        vram_label = ctk.CTkLabel(slider_frame, text="VRAM Budget:", font=("JetBrains Mono", 12), width=120)
-        vram_label.grid(row=0, column=0, padx=(12, 8), pady=8, sticky="w")
-
-        self.vram_slider = ctk.CTkSlider(slider_frame, from_=VRAM_MIN, to=VRAM_MAX, variable=self.vram_var, number_of_steps=60, command=self._on_vram_slider_change)
-        self.vram_slider.grid(row=0, column=1, padx=8, pady=8, sticky="ew")
-
-        self.vram_value_label = ctk.CTkLabel(slider_frame, text=f"{self.vram_var.get():.1f} GB", font=("JetBrains Mono", 12, "bold"), text_color="#4fc3f7", width=70)
-        self.vram_value_label.grid(row=0, column=2, padx=(8, 12), pady=8)
-
+        self.vram_var = ctk.DoubleVar(value=min(self.gpu_vram_gb, 32.0))
         self.lr_var = ctk.DoubleVar(value=0.04)
 
-        lr_label = ctk.CTkLabel(slider_frame, text="Matrix LR:", font=("JetBrains Mono", 12), width=120)
-        lr_label.grid(row=1, column=0, padx=(12, 8), pady=8, sticky="w")
+        self._build_ui()
+        self._update_config()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.lr_slider = ctk.CTkSlider(slider_frame, from_=LR_MIN, to=LR_MAX, variable=self.lr_var, number_of_steps=100, command=self._on_lr_slider_change)
-        self.lr_slider.grid(row=1, column=1, padx=8, pady=8, sticky="ew")
+    def _show_no_gpu(self):
+        self.geometry("400x150")
+        ctk.CTkLabel(self, text="No CUDA GPU found.\nLitesearch requires an NVIDIA GPU.",
+                     font=ctk.CTkFont(size=14), text_color="#ff6b6b").pack(expand=True)
 
-        self.lr_value_label = ctk.CTkLabel(slider_frame, text=f"{self.lr_var.get():.3f}", font=("JetBrains Mono", 12, "bold"), text_color="#4fc3f7", width=70)
-        self.lr_value_label.grid(row=1, column=2, padx=(8, 12), pady=8)
+    def _build_ui(self):
+        PAD = {"padx": 16, "pady": 8}
+        FONT = ctk.CTkFont(family="Consolas", size=12)
+        FONT_SM = ctk.CTkFont(family="Consolas", size=11)
+        FONT_LG = ctk.CTkFont(family="Consolas", size=13, weight="bold")
+        FONT_TITLE = ctk.CTkFont(family="Consolas", size=20, weight="bold")
 
-        # Config + buttons
-        control_frame = ctk.CTkFrame(main)
-        control_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        control_frame.grid_columnconfigure(0, weight=1)
+        root = ctk.CTkFrame(self, fg_color="transparent")
+        root.pack(fill="both", expand=True, padx=12, pady=12)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(3, weight=1)
 
-        self.config_label = ctk.CTkLabel(control_frame, text="", font=("JetBrains Mono", 11), text_color="#cccccc", anchor="w")
-        self.config_label.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+        # --- Header ---
+        header = ctk.CTkFrame(root, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(1, weight=1)
 
-        btn_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
-        btn_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 8))
+        ctk.CTkLabel(header, text="Litesearch", font=FONT_TITLE, text_color="#4fc3f7").grid(row=0, column=0, sticky="w")
+        dtype_str = "bf16" if self.use_bf16 else "fp32"
+        ctk.CTkLabel(header, text=f"{self.gpu_name}  •  {self.gpu_vram_gb:.1f} GB  •  {dtype_str}",
+                     font=FONT_SM, text_color="#888888").grid(row=0, column=1, sticky="e")
 
-        self.start_btn = ctk.CTkButton(btn_frame, text="Start Research", font=("JetBrains Mono", 13, "bold"), fg_color="#2e7d32", hover_color="#1b5e20", height=36, width=160, command=self._on_start)
-        self.start_btn.pack(side="left", padx=(0, 8))
+        # --- Controls ---
+        ctrl = ctk.CTkFrame(root)
+        ctrl.grid(row=1, column=0, sticky="ew", **PAD)
+        ctrl.grid_columnconfigure(1, weight=1)
 
-        self.stop_btn = ctk.CTkButton(btn_frame, text="Stop", font=("JetBrains Mono", 13, "bold"), fg_color="#c62828", hover_color="#b71c1c", height=36, width=100, command=self._on_stop, state="disabled")
-        self.stop_btn.pack(side="left")
+        ctk.CTkLabel(ctrl, text="VRAM", font=FONT).grid(row=0, column=0, padx=(12, 4), pady=6, sticky="w")
+        self.vram_slider = ctk.CTkSlider(ctrl, from_=1.0, to=32.0, variable=self.vram_var,
+                                          number_of_steps=62, command=self._on_vram)
+        self.vram_slider.grid(row=0, column=1, padx=6, pady=6, sticky="ew")
+        self.vram_lbl = ctk.CTkLabel(ctrl, text=f"{self.vram_var.get():.0f} GB", font=FONT_LG, text_color="#4fc3f7", width=60)
+        self.vram_lbl.grid(row=0, column=2, padx=(6, 12), pady=6)
 
-        self.status_label = ctk.CTkLabel(btn_frame, text="Ready", font=("JetBrains Mono", 11), text_color="#888888")
-        self.status_label.pack(side="right", padx=12)
+        ctk.CTkLabel(ctrl, text="LR", font=FONT).grid(row=1, column=0, padx=(12, 4), pady=6, sticky="w")
+        self.lr_slider = ctk.CTkSlider(ctrl, from_=0.005, to=0.2, variable=self.lr_var,
+                                        number_of_steps=40, command=self._on_lr)
+        self.lr_slider.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
+        self.lr_lbl = ctk.CTkLabel(ctrl, text=f"{self.lr_var.get():.3f}", font=FONT_LG, text_color="#4fc3f7", width=60)
+        self.lr_lbl.grid(row=1, column=2, padx=(6, 12), pady=6)
 
-        # VRAM bar
-        vram_bar_frame = ctk.CTkFrame(main)
-        vram_bar_frame.grid(row=3, column=0, sticky="ew", pady=(0, 4))
-        vram_bar_frame.grid_columnconfigure(1, weight=1)
+        # --- Config + buttons ---
+        bot = ctk.CTkFrame(root)
+        bot.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        bot.grid_columnconfigure(0, weight=1)
 
-        vram_bar_label = ctk.CTkLabel(vram_bar_frame, text="VRAM:", font=("JetBrains Mono", 11), width=55)
-        vram_bar_label.grid(row=0, column=0, padx=(12, 4), pady=6)
+        self.config_lbl = ctk.CTkLabel(bot, text="", font=FONT_SM, text_color="#bbbbbb", anchor="w")
+        self.config_lbl.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
 
-        self.vram_bar = ctk.CTkProgressBar(vram_bar_frame, height=16)
-        self.vram_bar.grid(row=0, column=1, padx=4, pady=6, sticky="ew")
+        btnrow = ctk.CTkFrame(bot, fg_color="transparent")
+        btnrow.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+
+        self.start_btn = ctk.CTkButton(btnrow, text="Start", font=FONT_LG,
+                                        fg_color="#2e7d32", hover_color="#1b5e20",
+                                        height=34, width=120, command=self._on_start)
+        self.start_btn.pack(side="left")
+
+        self.stop_btn = ctk.CTkButton(btnrow, text="Stop", font=FONT_LG,
+                                       fg_color="#c62828", hover_color="#b71c1c",
+                                       height=34, width=80, command=self._on_stop, state="disabled")
+        self.stop_btn.pack(side="left", padx=(8, 0))
+
+        self.status_lbl = ctk.CTkLabel(btnrow, text="Ready", font=FONT_SM, text_color="#888888")
+        self.status_lbl.pack(side="right")
+
+        # --- VRAM bar ---
+        vbar = ctk.CTkFrame(bot, fg_color="transparent")
+        vbar.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+        vbar.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(vbar, text="VRAM", font=FONT_SM, text_color="#888888").grid(row=0, column=0, padx=(0, 6))
+        self.vram_bar = ctk.CTkProgressBar(vbar, height=10)
+        self.vram_bar.grid(row=0, column=1, sticky="ew")
         self.vram_bar.set(0)
+        self.vram_txt = ctk.CTkLabel(vbar, text="", font=FONT_SM, text_color="#888888", width=100)
+        self.vram_txt.grid(row=0, column=2, padx=(6, 0))
 
-        self.vram_bar_text = ctk.CTkLabel(vram_bar_frame, text="0 / 0 MB", font=("JetBrains Mono", 10), text_color="#888888", width=120)
-        self.vram_bar_text.grid(row=0, column=2, padx=(4, 12), pady=6)
+        # --- Terminal ---
+        term_frame = ctk.CTkFrame(root)
+        term_frame.grid(row=3, column=0, sticky="nsew")
+        term_frame.grid_columnconfigure(0, weight=1)
+        term_frame.grid_rowconfigure(0, weight=1)
 
-        # Terminal log
-        terminal_frame = ctk.CTkFrame(main)
-        terminal_frame.grid(row=4, column=0, sticky="nsew", pady=(4, 0))
-        terminal_frame.grid_columnconfigure(0, weight=1)
-        terminal_frame.grid_rowconfigure(0, weight=1)
-
-        self.terminal = ctk.CTkTextbox(terminal_frame, font=("JetBrains Mono", 11), text_color="#e0e0e0", fg_color="#1a1a2e", scrollbar_button_color="#333355", wrap="word")
+        self.terminal = ctk.CTkTextbox(term_frame, font=FONT_SM, text_color="#d4d4d4",
+                                        fg_color="#0d0d1a", wrap="word")
         self.terminal.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
-        self._append_log("Litesearch ready. Adjust VRAM budget and click 'Start Research'.\n")
-        self._append_log(f"GPU: {self.gpu_name} ({self.gpu_vram_gb:.1f} GB)\n")
-        dtype_str = "bfloat16" if self.use_bf16 else "float32 (Pascal fallback)"
-        self._append_log(f"Dtype: {dtype_str}\n\n")
+        self._log("Ready. Adjust VRAM budget and click Start.\n\n")
 
-    def _update_config_preview(self):
+    def _log(self, text):
+        self.terminal.insert("end", text)
+        self.terminal.see("end")
+        lines = int(self.terminal.index("end-1c").split(".")[0])
+        if lines > 600:
+            self.terminal.delete("1.0", f"{lines - 500 + 1}.0")
+
+    def _update_config(self):
         vram_mb = self.vram_var.get() * 1024
         from train import compute_optimal_config
         from prepare import VOCAB_SIZE
         try:
-            config = compute_optimal_config(vram_mb, self.use_bf16, VOCAB_SIZE)
-            self.current_config = config
-            nparams = (config['depth'] * (4 * config['n_embd']**2 + 2 * config['n_embd'] * 4 * config['n_embd'])
-                       + 2 * VOCAB_SIZE * config['n_embd']
-                       + (config['depth'] // 2) * VOCAB_SIZE * config['n_embd'])
-            nparams_M = nparams / 1e6
-            config_str = (
-                f"depth={config['depth']}  "
-                f"d={config['n_embd']}  "
-                f"heads={config['n_head']}  "
-                f"B={config['device_batch_size']}  "
-                f"T={config['max_seq_len']}  "
-                f"~{nparams_M:.0f}M params  "
-                f"~{config['estimated_vram_mb']:.0f}MB est VRAM"
-            )
-            self.config_label.configure(text=config_str)
+            cfg = compute_optimal_config(vram_mb, self.use_bf16, VOCAB_SIZE)
+            self.current_config = cfg
+            np = (cfg['depth'] * (4 * cfg['n_embd']**2 + 2 * cfg['n_embd'] * 4 * cfg['n_embd'])
+                  + 2 * VOCAB_SIZE * cfg['n_embd']
+                  + (cfg['depth'] // 2) * VOCAB_SIZE * cfg['n_embd'])
+            self.config_lbl.configure(
+                text=f"depth={cfg['depth']}  d={cfg['n_embd']}  heads={cfg['n_head']}  "
+                     f"B={cfg['device_batch_size']}  T={cfg['max_seq_len']}  "
+                     f"~{np/1e6:.0f}M params  ~{cfg['estimated_vram_mb']:.0f}MB")
         except Exception as e:
-            self.config_label.configure(text=f"Config error: {e}")
+            self.config_lbl.configure(text=str(e))
             self.current_config = None
 
-    def _on_vram_slider_change(self, value):
-        self.vram_value_label.configure(text=f"{value:.1f} GB")
+    def _on_vram(self, val):
+        self.vram_lbl.configure(text=f"{val:.0f} GB")
         if not self.is_training:
-            self._update_config_preview()
+            self._update_config()
 
-    def _on_lr_slider_change(self, value):
-        self.lr_value_label.configure(text=f"{value:.3f}")
+    def _on_lr(self, val):
+        self.lr_lbl.configure(text=f"{val:.3f}")
 
     def _on_start(self):
-        if self.is_training:
-            return
-        if self.current_config is None:
-            self._append_log("ERROR: No valid config. Adjust VRAM slider.\n")
+        if self.is_training or self.current_config is None:
             return
 
-        self._append_log("Checking data...\n")
-        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch", "data")
-        tokenizer_dir = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch", "tokenizer")
-        if not os.path.exists(tokenizer_dir) or not os.listdir(tokenizer_dir):
-            self._append_log("Tokenizer not found. Run: python prepare.py\n")
-            self.status_label.configure(text="Run prepare.py first!", text_color="#ff6b6b")
+        cache = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch")
+        tok_dir = os.path.join(cache, "tokenizer")
+        data_dir = os.path.join(cache, "data")
+        if not os.path.exists(tok_dir) or not os.listdir(tok_dir):
+            self._log("No tokenizer found. Run: python prepare.py\n")
+            self.status_lbl.configure(text="Run prepare.py first", text_color="#ff6b6b")
             return
-        if not os.path.exists(cache_dir) or not any(f.endswith('.parquet') for f in os.listdir(cache_dir)):
-            self._append_log("Data shards not found. Run: python prepare.py\n")
-            self.status_label.configure(text="Run prepare.py first!", text_color="#ff6b6b")
+        if not os.path.exists(data_dir) or not any(f.endswith('.parquet') for f in os.listdir(data_dir)):
+            self._log("No data found. Run: python prepare.py\n")
+            self.status_lbl.configure(text="Run prepare.py first", text_color="#ff6b6b")
             return
 
         self.is_training = True
@@ -221,126 +205,102 @@ class LitesearchApp(ctk.CTk):
         import torch
         torch.cuda.reset_peak_memory_stats()
 
-        config = dict(self.current_config)
-        lr_override = self.lr_var.get()
+        cfg = dict(self.current_config)
+        lr = self.lr_var.get()
 
         self.terminal.delete("1.0", "end")
-
-        self._append_log("=" * 60 + "\n")
-        self._append_log("Starting research experiment...\n")
-        self._append_log(f"VRAM budget: {self.vram_var.get():.1f} GB\n")
-        self._append_log(f"Matrix LR: {lr_override:.3f}\n")
-        self._append_log(f"Config: depth={config['depth']}, d={config['n_embd']}, "
-                        f"B={config['device_batch_size']}, T={config['max_seq_len']}\n")
-        self._append_log("=" * 60 + "\n\n")
+        self._log(f"Starting  •  VRAM budget {self.vram_var.get():.0f} GB  •  LR {lr:.3f}\n")
+        self._log(f"Config: depth={cfg['depth']} d={cfg['n_embd']} B={cfg['device_batch_size']} T={cfg['max_seq_len']}\n\n")
 
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.vram_slider.configure(state="disabled")
-        self.status_label.configure(text="Training...", text_color="#4fc3f7")
+        self.status_lbl.configure(text="Training...", text_color="#4fc3f7")
 
-        self.training_thread = threading.Thread(target=self._training_worker, args=(config, lr_override), daemon=True)
+        self.training_thread = threading.Thread(target=self._worker, args=(cfg, lr), daemon=True)
         self.training_thread.start()
-
-        self.after(POLL_INTERVAL_MS, self._poll_training)
+        self.after(100, self._poll)
 
     def _on_stop(self):
-        if self.stop_event is not None:
+        if self.stop_event:
             self.stop_event.set()
-        self.status_label.configure(text="Stopping...", text_color="#ffab40")
+        self.status_lbl.configure(text="Stopping...", text_color="#ffab40")
 
-    def _training_worker(self, config, lr_override):
+    def _worker(self, cfg, lr):
         try:
             from train import run_training
-            result = run_training(config=config, lr_override=lr_override, log_queue=self.log_queue, stop_event=self.stop_event)
-            self.result = result
+            self.result = run_training(config=cfg, lr_override=lr,
+                                        log_queue=self.log_queue, stop_event=self.stop_event)
         except Exception as e:
-            self.log_queue.put(f"\nFATAL ERROR: {e}\n")
+            self.log_queue.put(f"\nCRASH: {e}\n")
             self.result = {'crashed': True, 'val_bpb': 0.0, 'peak_vram_mb': 0.0}
-        self.log_queue.put("__TRAINING_DONE__")
+        self.log_queue.put("__DONE__")
 
-    def _poll_training(self):
+    def _poll(self):
         if not self.is_training:
             return
-        messages = []
+        msgs = []
         try:
             while True:
-                messages.append(self.log_queue.get_nowait())
+                msgs.append(self.log_queue.get_nowait())
         except queue.Empty:
             pass
-        for msg in messages:
-            if msg == "__TRAINING_DONE__":
-                self._on_training_done()
+        for m in msgs:
+            if m == "__DONE__":
+                self._on_done()
                 return
-            self._append_log(msg)
-        self._update_vram_bar()
-        self.after(POLL_INTERVAL_MS, self._poll_training)
+            self._log(m)
+        self._update_vram()
+        self.after(100, self._poll)
 
-    def _on_training_done(self):
+    def _on_done(self):
         self.is_training = False
-        self._update_vram_bar()
-        if self.result and not self.result.get('crashed', False):
-            self._log_results_tsv(self.result)
-            val_bpb = self.result.get('val_bpb', 0)
-            self.status_label.configure(text=f"Done — val_bpb: {val_bpb:.6f}", text_color="#69f0ae")
+        self._update_vram()
+        if self.result and not self.result.get('crashed'):
+            self._save_tsv(self.result)
+            self.status_lbl.configure(text=f"Done  •  val_bpb {self.result['val_bpb']:.6f}", text_color="#69f0ae")
         else:
-            self.status_label.configure(text="Crashed / Stopped", text_color="#ff6b6b")
+            self.status_lbl.configure(text="Crashed", text_color="#ff6b6b")
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         self.vram_slider.configure(state="normal")
 
-    def _update_vram_bar(self):
+    def _update_vram(self):
         import torch
         if not torch.cuda.is_available():
             return
         try:
-            allocated = torch.cuda.max_memory_allocated() / 1024 / 1024
-            total = self.gpu_vram_mb
-            frac = min(allocated / total, 1.0) if total > 0 else 0
+            alloc = torch.cuda.max_memory_allocated() / 1024 / 1024
+            frac = min(alloc / self.gpu_vram_mb, 1.0) if self.gpu_vram_mb > 0 else 0
             self.vram_bar.set(frac)
-            if frac < 0.5:
-                color = "#69f0ae"
-            elif frac < 0.8:
-                color = "#ffd54f"
-            else:
-                color = "#ff6b6b"
-            self.vram_bar.configure(progress_color=color)
-            self.vram_bar_text.configure(text=f"{allocated:.0f} / {total:.0f} MB ({frac*100:.0f}%)", text_color=color)
+            c = "#69f0ae" if frac < 0.5 else "#ffd54f" if frac < 0.8 else "#ff6b6b"
+            self.vram_bar.configure(progress_color=c)
+            self.vram_txt.configure(text=f"{alloc:.0f} / {self.gpu_vram_mb:.0f} MB", text_color=c)
         except Exception:
             pass
 
-    def _append_log(self, text):
-        self.terminal.insert("end", text)
-        self.terminal.see("end")
-        line_count = int(self.terminal.index("end-1c").split(".")[0])
-        if line_count > MAX_LOG_LINES + 100:
-            self.terminal.delete("1.0", f"{line_count - MAX_LOG_LINES + 1}.0")
-
-    def _log_results_tsv(self, result):
+    def _save_tsv(self, r):
         try:
             try:
-                commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+                commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                                  stderr=subprocess.DEVNULL).decode().strip()
             except Exception:
                 commit = "unknown"
-            val_bpb = result.get('val_bpb', 0.0)
-            memory_gb = result.get('peak_vram_mb', 0.0) / 1024
-            depth = result.get('depth', '?')
-            n_embd = result.get('n_embd', '?')
-            status = "crash" if result.get('crashed', False) else "keep"
-            description = f"depth={depth} d={n_embd} lr={self.lr_var.get():.3f} vram={self.vram_var.get():.1f}GB"
+            desc = f"depth={r.get('depth','?')} d={r.get('n_embd','?')} lr={self.lr_var.get():.3f}"
+            status = "crash" if r.get('crashed') else "keep"
             if not os.path.exists(RESULTS_FILE):
                 with open(RESULTS_FILE, "w") as f:
                     f.write("commit\tval_bpb\tmemory_gb\tstatus\tdescription\n")
             with open(RESULTS_FILE, "a") as f:
-                f.write(f"{commit}\t{val_bpb:.6f}\t{memory_gb:.1f}\t{status}\t{description}\n")
-            self._append_log(f"Results logged to {RESULTS_FILE}\n")
+                f.write(f"{commit}\t{r['val_bpb']:.6f}\t{r['peak_vram_mb']/1024:.1f}\t{status}\t{desc}\n")
+            self._log(f"Logged to {RESULTS_FILE}\n")
         except Exception as e:
-            self._append_log(f"Warning: Could not log results: {e}\n")
+            self._log(f"Log error: {e}\n")
 
     def _on_close(self):
-        if self.is_training and self.stop_event is not None:
+        if self.is_training and self.stop_event:
             self.stop_event.set()
-            if self.training_thread is not None:
+            if self.training_thread:
                 self.training_thread.join(timeout=3)
         self.destroy()
 
