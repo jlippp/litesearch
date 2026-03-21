@@ -7,7 +7,7 @@
 The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model.
 
 **Litesearch** adds:
-- **Consumer GPU support**: Works on 2GB–32GB+ VRAM GPUs (GTX 1060 through RTX 4090+)
+- **Consumer GPU support**: Works on GTX 970 through RTX 4090+ (2GB–32GB+ VRAM)
 - **Auto VRAM scaling**: Model size, batch size, and sequence length automatically fit your GPU
 - **GUI dashboard**: CustomTkinter interface with live training log, VRAM bar, and config sliders
 - **Pascal support**: Automatic fp32 fallback for GTX 10-series GPUs
@@ -61,29 +61,12 @@ uv run train.py
 
 ## The GUI
 
-```
-+-------------------------------------------------------+
-|  Litesearch — Autonomous Research for Consumer GPUs    |
-+-------------------------------------------------------+
-|  VRAM Budget:      [========slider========] 4.0 GB    |
-|  Learning Rate:    [========slider========] 0.040      |
-|  GPU: NVIDIA RTX 3060 (5.7 GB) | bfloat16             |
-|                                                       |
-|  Config: depth=6 d=384 B=4 T=512 ~32M params ~1.2GB  |
-|                                                       |
-|  [ Start Research ]            [ Stop ]               |
-+-------------------------------------------------------+
-|  VRAM: [████████░░░░░░░░] 2.1 / 5.7 GB               |
-+-------------------------------------------------------+
-|  > step 00042 (14.2%) | loss: 3.421 | mfu: 23.1%      |
-|  (scrolling terminal log)                             |
-+-------------------------------------------------------+
-```
+![Dashboard](dashboard.png)
 
 **Controls:**
 - **VRAM slider**: Set your GPU's VRAM budget. The model auto-scales to fit, leaving 800MB for the OS.
 - **Matrix LR slider**: Override the Muon optimizer learning rate (default 0.04).
-- **Start Research**: Begins a training experiment with auto-computed config.
+- **Start**: Begins a training experiment with auto-computed config.
 - **Stop**: Gracefully stops training after the current step.
 
 ## VRAM Auto-Scaling
@@ -92,13 +75,12 @@ The model automatically adapts to your GPU. Set the slider to your available VRA
 
 | VRAM Budget | Depth | n_embd | Batch | Seq Len | ~Params | Est. VRAM |
 |-------------|-------|--------|-------|---------|---------|-----------|
-| 2 GB | 4 | 256 | 1 | 512 | ~8M | ~600 MB |
-| 4 GB | 6 | 384 | 2 | 512 | ~17M | ~1.2 GB |
-| 8 GB | 8 | 512 | 4 | 1024 | ~33M | ~2.8 GB |
-| 16 GB | 12 | 768 | 8 | 2048 | ~86M | ~7.5 GB |
-| 32 GB | 16 | 1024 | 16 | 2048 | ~183M | ~15 GB |
+| 4 GB | 10 | 640 | 4 | 2048 | ~86M | ~1.4 GB |
+| 8 GB | 16 | 1024 | 8 | 2048 | ~285M | ~4.6 GB |
+| 16 GB | 20 | 1280 | 16 | 2048 | ~519M | ~7.5 GB |
+| 32 GB | 24 | 1536 | 64 | 2048 | ~856M | ~15 GB |
 
-Always leaves an 800MB safety buffer. Gradient checkpointing keeps activation memory low.
+Reserves 800MB for desktop/OS and uses 50% of remaining VRAM. Gradient checkpointing keeps activation memory low.
 
 ## Running the agent (headless)
 
@@ -140,7 +122,7 @@ pyproject.toml  — dependencies
 | RTX 3090 / 3080 | ✅ | bfloat16 |
 | RTX 2080 Ti | ✅ | bfloat16 |
 | GTX 1080 Ti / 1080 | ✅ | fp32 fallback (~2x memory) |
-| GTX 1060 6GB | ⚠️ | Works but very limited (small models) |
+| GTX 970 / 980 | ✅ | fp32, small models only |
 | AMD / Intel | ❌ | Not supported (would need ROCm/XPU backend) |
 
 ## Notable forks
