@@ -117,6 +117,11 @@ class LitesearchApp(ctk.CTk):
                                         height=34, width=120, command=self._on_start)
         self.start_btn.pack(side="left")
 
+        self.continue_btn = ctk.CTkButton(btnrow, text="Continue", font=FONT_SM,
+                                           fg_color="#e65100", hover_color="#bf360c",
+                                           height=34, width=90, command=self._on_continue, state="disabled")
+        self.continue_btn.pack(side="left", padx=(8, 0))
+
         self.stop_btn = ctk.CTkButton(btnrow, text="Stop", font=FONT_LG,
                                        fg_color="#c62828", hover_color="#b71c1c",
                                        height=34, width=80, command=self._on_stop, state="disabled")
@@ -230,6 +235,7 @@ class LitesearchApp(ctk.CTk):
         self._log(f"Config: depth={cfg['depth']} d={cfg['n_embd']} B={cfg['device_batch_size']} T={cfg['max_seq_len']}\n\n")
 
         self.start_btn.configure(state="disabled")
+        self.continue_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.export_btn.configure(state="disabled")
         self.try_btn.configure(state="disabled")
@@ -244,6 +250,44 @@ class LitesearchApp(ctk.CTk):
         if self.stop_event:
             self.stop_event.set()
         self.status_lbl.configure(text="Stopping...", text_color="#ffab40")
+
+    def _on_continue(self):
+        if self.is_training or not self.result or self.result.get('crashed'):
+            return
+
+        self.is_training = True
+        self.stop_event = threading.Event()
+        self.log_queue = queue.Queue()
+        prev_result = dict(self.result)
+        lr = self.lr_var.get()
+
+        import torch
+        torch.cuda.reset_peak_memory_stats()
+
+        self.terminal.delete("1.0", "end")
+        self._log(f"Continuing  •  LR {lr:.3f}\n\n")
+
+        self.start_btn.configure(state="disabled")
+        self.continue_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.export_btn.configure(state="disabled")
+        self.try_btn.configure(state="disabled")
+        self.vram_slider.configure(state="disabled")
+        self.status_lbl.configure(text="Training...", text_color="#4fc3f7")
+
+        self.training_thread = threading.Thread(target=self._continue_worker, args=(prev_result, lr), daemon=True)
+        self.training_thread.start()
+        self.after(100, self._poll)
+
+    def _continue_worker(self, prev_result, lr):
+        try:
+            from train import continue_training
+            self.result = continue_training(prev_result, lr_override=lr,
+                                             log_queue=self.log_queue, stop_event=self.stop_event)
+        except Exception as e:
+            self.log_queue.put(f"\nCRASH: {e}\n")
+            self.result = {'crashed': True, 'val_bpb': 0.0, 'peak_vram_mb': 0.0}
+        self.log_queue.put("__DONE__")
 
     def _worker(self, cfg, lr):
         try:
@@ -280,6 +324,7 @@ class LitesearchApp(ctk.CTk):
             self._save_tsv(self.result)
             self.export_btn.configure(state="normal")
             self.try_btn.configure(state="normal")
+            self.continue_btn.configure(state="normal")
             self.status_lbl.configure(text=f"Done  •  val_bpb {self.result['val_bpb']:.6f}", text_color="#69f0ae")
             if self.export_after_n and self.experiment_count >= self.export_after_n:
                 self._do_export()

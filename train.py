@@ -765,6 +765,190 @@ def run_training(config=None, lr_override=None, log_queue=None, stop_event=None)
         'model': model,
         'config': model_config,
         'use_bf16': use_bf16,
+        'device_batch_size': device_batch_size,
+        'total_batch_size': total_batch_size,
+    }
+
+
+def continue_training(prev_result, lr_override=None, log_queue=None, stop_event=None):
+    def log(msg, end="\n"):
+        if log_queue is not None:
+            log_queue.put(msg + end)
+        else:
+            print(msg, end=end, flush=True)
+
+    model = prev_result['model']
+    model_config = prev_result['config']
+    use_bf16 = prev_result['use_bf16']
+    device = next(model.parameters()).device
+    cap = torch.cuda.get_device_capability()
+    peak_flops = get_peak_flops(cap, use_bf16)
+    dtype = torch.bfloat16 if use_bf16 else torch.float32
+    autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=dtype) if use_bf16 else torch.autocast("cuda", enabled=False)
+
+    depth = model_config.n_layer
+    n_embd = model_config.n_embd
+    max_seq_len = model_config.sequence_len
+    device_batch_size = prev_result.get('device_batch_size', DEVICE_BATCH_SIZE)
+    total_batch_size = prev_result.get('total_batch_size', TOTAL_BATCH_SIZE)
+
+    tokenizer = Tokenizer.from_directory()
+    num_flops_per_token = model.estimate_flops()
+
+    tokens_per_fwdbwd = device_batch_size * max_seq_len
+    if total_batch_size % tokens_per_fwdbwd != 0:
+        total_batch_size = ((total_batch_size + tokens_per_fwdbwd - 1) // tokens_per_fwdbwd) * tokens_per_fwdbwd
+    grad_accum_steps = total_batch_size // tokens_per_fwdbwd
+
+    optimizer = model.setup_optimizer(
+        unembedding_lr=UNEMBEDDING_LR, embedding_lr=EMBEDDING_LR,
+        scalar_lr=SCALAR_LR, adam_betas=ADAM_BETAS,
+        matrix_lr=lr_override if lr_override is not None else MATRIX_LR,
+        weight_decay=WEIGHT_DECAY, use_bf16=use_bf16,
+    )
+
+    from prepare import make_dataloader as _make_dataloader
+    train_loader = _make_dataloader(tokenizer, device_batch_size, max_seq_len, "train")
+    x, y, epoch = next(train_loader)
+
+    log(f"Continuing training for {TIME_BUDGET}s...")
+    log(f"Model: depth={depth}, d={n_embd}, params={sum(p.numel() for p in model.parameters())/1e6:.1f}M")
+    log("")
+
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
+
+    t_start = time.time()
+    t_start_training = time.time()
+    smooth_train_loss = 0
+    total_training_time = 0
+    step = 0
+    crashed = False
+    num_params = sum(p.numel() for p in model.parameters())
+
+    try:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                log("\nTraining stopped by user.")
+                break
+
+            torch.cuda.synchronize()
+            t0 = time.time()
+            for micro_step in range(grad_accum_steps):
+                with autocast_ctx:
+                    loss = model(x, y)
+                train_loss = loss.detach()
+                loss = loss / grad_accum_steps
+                loss.backward()
+                x, y, epoch = next(train_loader)
+
+            progress = min(total_training_time / TIME_BUDGET, 1.0)
+            lrm = get_lr_multiplier(progress)
+            muon_momentum = get_muon_momentum(step)
+            muon_weight_decay = get_weight_decay(progress)
+            for group in optimizer.param_groups:
+                group["lr"] = group["initial_lr"] * lrm
+                if group['kind'] == 'muon':
+                    group["momentum"] = muon_momentum
+                    group["weight_decay"] = muon_weight_decay
+            optimizer.step()
+            model.zero_grad(set_to_none=True)
+
+            train_loss_f = train_loss.item()
+
+            if math.isnan(train_loss_f) or train_loss_f > 100:
+                log("FAIL — loss exploding")
+                crashed = True
+                break
+
+            torch.cuda.synchronize()
+            t1 = time.time()
+            dt = t1 - t0
+
+            if step > 10:
+                total_training_time += dt
+
+            ema_beta = 0.9
+            smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
+            debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
+            pct_done = 100 * progress
+            tok_per_sec = int(total_batch_size / dt)
+            mfu = 100 * num_flops_per_token * total_batch_size / dt / peak_flops
+            remaining = max(0, TIME_BUDGET - total_training_time)
+            current_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+
+            log(f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.1f}% | vram: {current_vram_mb:.0f}MB | remaining: {remaining:.0f}s")
+
+            if step == 0:
+                gc.collect()
+                gc.freeze()
+                gc.disable()
+            elif (step + 1) % 5000 == 0:
+                gc.collect()
+
+            step += 1
+
+            if step > 10 and total_training_time >= TIME_BUDGET:
+                break
+
+    except Exception as e:
+        log(f"\nTraining crashed: {e}")
+        crashed = True
+
+    log("")
+
+    total_tokens = step * total_batch_size
+
+    val_bpb = 0.0
+    if not crashed and step > 10:
+        try:
+            model.eval()
+            with autocast_ctx:
+                import prepare
+                eval_steps = max(30, min(int(torch.cuda.get_device_properties(0).total_mem / 1024 / 1024 / 100), 100))
+                cap_tokens = eval_steps * device_batch_size * max_seq_len
+                old_eval = prepare.EVAL_TOKENS
+                prepare.EVAL_TOKENS = min(old_eval, cap_tokens)
+                log(f"Evaluating ({eval_steps} steps)...")
+                val_bpb = evaluate_bpb(model, tokenizer, device_batch_size)
+                prepare.EVAL_TOKENS = old_eval
+        except Exception as e:
+            log(f"Evaluation failed: {e}")
+            crashed = True
+
+    t_end = time.time()
+    steady_state_mfu = 100 * num_flops_per_token * total_batch_size * max(0, step - 10) / max(total_training_time, 1e-6) / peak_flops if total_training_time > 0 else 0
+    peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+
+    log("---")
+    log(f"val_bpb:          {val_bpb:.6f}")
+    log(f"training_seconds: {total_training_time:.1f}")
+    log(f"total_seconds:    {t_end - t_start:.1f}")
+    log(f"peak_vram_mb:     {peak_vram_mb:.1f}")
+    log(f"mfu_percent:      {steady_state_mfu:.2f}")
+    log(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
+    log(f"num_steps:        {step}")
+    log(f"num_params_M:     {num_params / 1e6:.1f}")
+    log(f"depth:            {depth}")
+    log(f"dtype:            {'bf16' if use_bf16 else 'fp32'}")
+
+    return {
+        'val_bpb': val_bpb,
+        'training_seconds': total_training_time,
+        'total_seconds': t_end - t_start,
+        'peak_vram_mb': peak_vram_mb,
+        'mfu_percent': steady_state_mfu,
+        'total_tokens_M': total_tokens / 1e6,
+        'num_steps': step,
+        'num_params_M': num_params / 1e6,
+        'depth': depth,
+        'n_embd': n_embd,
+        'crashed': crashed,
+        'model': model,
+        'config': model_config,
+        'use_bf16': use_bf16,
+        'device_batch_size': device_batch_size,
+        'total_batch_size': total_batch_size,
     }
 
 
