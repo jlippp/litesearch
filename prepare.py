@@ -36,7 +36,6 @@ VAL_SHARD = MAX_SHARD  # pinned validation shard (shard_06542)
 VAL_FILENAME = f"shard_{VAL_SHARD:05d}.parquet"
 VOCAB_SIZE = 8192
 
-# BPE split pattern (GPT-4 style, with \p{N}{1,2} instead of {1,3})
 SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
 SPECIAL_TOKENS = [f"<|reserved_{i}|>" for i in range(4)]
@@ -77,14 +76,12 @@ def download_single_shard(index):
 
 
 def download_data(num_shards, download_workers=8):
-    """Download training shards + pinned validation shard."""
     os.makedirs(DATA_DIR, exist_ok=True)
     num_train = min(num_shards, MAX_SHARD)
     ids = list(range(num_train))
     if VAL_SHARD not in ids:
         ids.append(VAL_SHARD)
-
-    # Count what's already downloaded
+        
     existing = sum(1 for i in ids if os.path.exists(os.path.join(DATA_DIR, f"shard_{i:05d}.parquet")))
     if existing == len(ids):
         print(f"Data: all {len(ids)} shards already downloaded at {DATA_DIR}")
@@ -101,13 +98,11 @@ def download_data(num_shards, download_workers=8):
     print(f"Data: {ok}/{len(ids)} shards ready at {DATA_DIR}")
 
 def list_parquet_files():
-    """Return sorted list of parquet file paths in the data directory."""
     files = sorted(f for f in os.listdir(DATA_DIR) if f.endswith(".parquet") and not f.endswith(".tmp"))
     return [os.path.join(DATA_DIR, f) for f in files]
 
 
 def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
-    """Yield documents from training split (all shards except pinned val shard)."""
     parquet_paths = [p for p in list_parquet_files() if not p.endswith(VAL_FILENAME)]
     nchars = 0
     for filepath in parquet_paths:
@@ -123,7 +118,6 @@ def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
 
 
 def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
     tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
     token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
 
@@ -145,7 +139,6 @@ def train_tokenizer():
     vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
     tokenizer.train_from_iterator(text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN)
 
-    # Build tiktoken encoding from trained merges
     pattern = tokenizer.get_pattern()
     mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
     tokens_offset = len(mergeable_ranks)
