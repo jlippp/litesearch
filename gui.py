@@ -135,6 +135,11 @@ class LitesearchApp(ctk.CTk):
         self.schedule_lbl = ctk.CTkLabel(btnrow, text="", font=FONT_SM, text_color="#888888")
         self.schedule_lbl.pack(side="left", padx=(4, 0))
 
+        self.try_btn = ctk.CTkButton(btnrow, text="Try", font=FONT_SM,
+                                      fg_color="#00695c", hover_color="#004d40",
+                                      height=34, width=60, command=self._open_try_dialog, state="disabled")
+        self.try_btn.pack(side="left", padx=(8, 0))
+
         self.status_lbl = ctk.CTkLabel(btnrow, text="Ready", font=FONT_SM, text_color="#888888")
         self.status_lbl.pack(side="right")
 
@@ -227,6 +232,7 @@ class LitesearchApp(ctk.CTk):
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.export_btn.configure(state="disabled")
+        self.try_btn.configure(state="disabled")
         self.vram_slider.configure(state="disabled")
         self.status_lbl.configure(text="Training...", text_color="#4fc3f7")
 
@@ -273,6 +279,7 @@ class LitesearchApp(ctk.CTk):
             self.experiment_count += 1
             self._save_tsv(self.result)
             self.export_btn.configure(state="normal")
+            self.try_btn.configure(state="normal")
             self.status_lbl.configure(text=f"Done  •  val_bpb {self.result['val_bpb']:.6f}", text_color="#69f0ae")
             if self.export_after_n and self.experiment_count >= self.export_after_n:
                 self._do_export()
@@ -349,7 +356,7 @@ class LitesearchApp(ctk.CTk):
         entry.pack(pady=4)
 
         ctk.CTkLabel(dlg, text="Export directory:", font=FONT).pack(pady=(12, 4))
-        dir_var = ctk.StringVar(value=os.path.join(os.getcwd(), "exports"))
+        dir_var = ctk.StringVar(value="exports")
         dir_entry = ctk.CTkEntry(dlg, textvariable=dir_var, width=280)
         dir_entry.pack(pady=4)
 
@@ -379,6 +386,95 @@ class LitesearchApp(ctk.CTk):
         ctk.CTkButton(btn_frame, text="Apply", width=80, command=apply).pack(side="left", padx=4)
         ctk.CTkButton(btn_frame, text="Cancel", width=80, fg_color="#555555", hover_color="#333333",
                        command=dlg.destroy).pack(side="left", padx=4)
+
+    def _open_try_dialog(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Try model")
+        dlg.geometry("500x460")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        FONT = ctk.CTkFont(family="Consolas", size=12)
+        FONT_SM = ctk.CTkFont(family="Consolas", size=11)
+
+        page_settings = ctk.CTkFrame(dlg)
+        page_settings.pack(fill="both", expand=True, padx=16, pady=16)
+
+        page_output = ctk.CTkFrame(dlg)
+
+        ctk.CTkLabel(page_settings, text="Prompt", font=FONT).pack(anchor="w")
+        prompt_box = ctk.CTkTextbox(page_settings, height=120, font=FONT_SM, wrap="word")
+        prompt_box.pack(fill="x", pady=(4, 12))
+        prompt_box.insert("1.0", "The meaning of life is")
+
+        temp_var = ctk.DoubleVar(value=0.7)
+        tokens_var = ctk.IntVar(value=128)
+        top_p_var = ctk.DoubleVar(value=0.9)
+
+        def slider_row(parent, label, var, from_, to, fmt):
+            frame = ctk.CTkFrame(parent, fg_color="transparent")
+            frame.pack(fill="x", pady=4)
+            frame.grid_columnconfigure(1, weight=1)
+            lbl = ctk.CTkLabel(frame, text=label, font=FONT_SM, width=100)
+            lbl.grid(row=0, column=0, padx=(0, 6))
+            ctk.CTkSlider(frame, from_=from_, to=to, variable=var, number_of_steps=40).grid(row=0, column=1, sticky="ew")
+            val_lbl = ctk.CTkLabel(frame, text=fmt(var.get()), font=FONT_SM, width=50)
+            val_lbl.grid(row=0, column=2, padx=(6, 0))
+            def update(*a): val_lbl.configure(text=fmt(var.get()))
+            var.trace_add("write", update)
+            return frame
+
+        slider_row(page_settings, "Temperature", temp_var, 0.1, 2.0, lambda v: f"{v:.1f}")
+        slider_row(page_settings, "Max tokens", tokens_var, 16, 512, lambda v: f"{int(v)}")
+        slider_row(page_settings, "Top-p", top_p_var, 0.1, 1.0, lambda v: f"{v:.1f}")
+
+        output_box = ctk.CTkTextbox(page_output, font=FONT_SM, wrap="word", fg_color="#0d0d1a")
+        output_box.pack(fill="both", expand=True, padx=16, pady=16)
+
+        def do_generate():
+            prompt = prompt_box.get("1.0", "end").strip()
+            if not prompt:
+                return
+            page_settings.pack_forget()
+            page_output.pack(fill="both", expand=True, padx=16, pady=16)
+            output_box.delete("1.0", "end")
+            output_box.insert("end", "Generating...\n")
+            dlg.update()
+
+            try:
+                from train import generate
+                tok = self._get_tokenizer()
+                result = generate(
+                    self.result['model'], tok, prompt,
+                    max_tokens=tokens_var.get(),
+                    temperature=temp_var.get(),
+                    top_p=top_p_var.get(),
+                )
+                output_box.delete("1.0", "end")
+                output_box.insert("end", result)
+            except Exception as e:
+                output_box.delete("1.0", "end")
+                output_box.insert("end", f"Error: {e}")
+
+        def do_back():
+            if page_output.winfo_ismapped():
+                page_output.pack_forget()
+                page_settings.pack(fill="both", expand=True, padx=16, pady=16)
+            else:
+                dlg.destroy()
+
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=(0, 12))
+
+        gen_btn = ctk.CTkButton(btn_frame, text="Generate", width=100, command=do_generate)
+        gen_btn.pack(side="left", padx=4)
+        back_btn = ctk.CTkButton(btn_frame, text="Back", width=80,
+                                  fg_color="#555555", hover_color="#333333", command=do_back)
+        back_btn.pack(side="left", padx=4)
+
+    def _get_tokenizer(self):
+        from prepare import Tokenizer
+        return Tokenizer.from_directory()
 
     def _on_close(self):
         if self.is_training and self.stop_event:

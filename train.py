@@ -785,6 +785,35 @@ def export_model(result, output_path):
         return False
 
 
+def generate(model, tokenizer, prompt, max_tokens=128, temperature=0.7, top_p=0.9):
+    gc.enable()
+    gc.collect()
+
+    model.eval()
+    device = next(model.parameters()).device
+    ids = tokenizer.encode(prompt)
+    input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+
+    with torch.no_grad():
+        for _ in range(max_tokens):
+            if input_ids.size(1) > model.config.sequence_len:
+                input_ids = input_ids[:, -model.config.sequence_len:]
+            logits = model(input_ids[:, -model.config.sequence_len:])
+            logits = logits[:, -1, :] / temperature
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+            cumprobs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+            mask = cumprobs - torch.softmax(sorted_logits, dim=-1) >= top_p
+            sorted_logits[mask] = float('-inf')
+            probs = torch.softmax(sorted_logits, dim=-1)
+            next_idx = torch.multinomial(probs, num_samples=1)
+            next_id = sorted_idx.gather(-1, next_idx)
+            if next_id.item() == tokenizer.get_bos_token_id():
+                break
+            input_ids = torch.cat([input_ids, next_id], dim=1)
+
+    return tokenizer.decode(input_ids[0].tolist())
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--export", type=str, default=None, help="Export model to path after training")
