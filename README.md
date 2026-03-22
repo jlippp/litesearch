@@ -82,6 +82,17 @@ The model automatically adapts to your GPU. Set the slider to your available VRA
 
 Reserves 800MB for desktop/OS and uses 50% of remaining VRAM. Gradient checkpointing keeps activation memory low.
 
+## Exporting models
+
+After training, export the model as a `.pth` file (PyTorch format):
+
+```bash
+python train.py --export model.pth        # export after training
+python train.py --export-dir exports/     # export to directory (auto-named)
+```
+
+The GUI also has an "Export" button (after training) and "Schedule" button (auto-export after N experiments).
+
 ## Running the agent (headless)
 
 You can still use the original autoresearch agent workflow:

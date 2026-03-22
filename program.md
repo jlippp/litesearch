@@ -112,3 +112,53 @@ The idea is that you are a completely autonomous researcher trying things out. I
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
 
 As an example use case, a user might leave you running while they sleep. If each experiment takes you ~5 minutes then you can run approx 12/hour, for a total of about 100 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+
+## Exporting models
+
+After training, export the model as a `.pth` file containing weights + config:
+
+```bash
+# Train and export immediately
+python train.py --export model.pth
+
+# Train and export to a directory (auto-named by timestamp)
+python train.py --export-dir exports/
+```
+
+The exported `.pth` file contains:
+- `state_dict` — model weights
+- `config` — model architecture (depth, n_embd, heads, vocab_size, etc.)
+- `use_bf16` — whether the model uses bfloat16
+
+To load an exported model:
+
+```python
+import torch
+from train import GPT, GPTConfig
+
+data = torch.load('model.pth', weights_only=False)
+config = GPTConfig(**data['config'])
+model = GPT(config)
+model.load_state_dict(data['state_dict'])
+```
+
+## Agent workflow
+
+For AI agents (Claude Code, Codex, etc.) automating experiments:
+
+```bash
+# Run 10 experiments, export best model
+for i in $(seq 1 10); do
+    python train.py --export-dir exports/ >> run.log 2>&1
+    val_bpb=$(grep "^val_bpb:" run.log | tail -1 | awk '{print $2}')
+    echo "Run $i: val_bpb=$val_bpb"
+done
+```
+
+Agents can also:
+- Edit `train.py` between runs to try different architectures
+- Compare `val_bpb` across runs to find the best config
+- Export every N runs using `--export-dir`
+- Chain with HuggingFace Hub upload: `huggingface-cli upload model.pth`
+
+The `--export` and `--export-dir` flags are safe to combine with any other training modifications.

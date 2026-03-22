@@ -7,6 +7,7 @@ import os
 import threading
 import queue
 import subprocess
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -41,6 +42,9 @@ class LitesearchApp(ctk.CTk):
         self.is_training = False
         self.current_config = None
         self.result = None
+        self.experiment_count = 0
+        self.export_after_n = None
+        self.export_dir = None
 
         self.gpu_name, self.gpu_vram_gb, self.gpu_vram_mb, self.gpu_cap, self.use_bf16 = detect_gpu()
         if self.gpu_name is None:
@@ -117,6 +121,19 @@ class LitesearchApp(ctk.CTk):
                                        fg_color="#c62828", hover_color="#b71c1c",
                                        height=34, width=80, command=self._on_stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
+
+        self.export_btn = ctk.CTkButton(btnrow, text="Export", font=FONT_SM,
+                                         fg_color="#1565c0", hover_color="#0d47a1",
+                                         height=34, width=80, command=self._on_export, state="disabled")
+        self.export_btn.pack(side="left", padx=(8, 0))
+
+        self.schedule_btn = ctk.CTkButton(btnrow, text="Schedule", font=FONT_SM,
+                                           fg_color="#4527a0", hover_color="#311b92",
+                                           height=34, width=80, command=self._open_schedule_dialog)
+        self.schedule_btn.pack(side="left", padx=(8, 0))
+
+        self.schedule_lbl = ctk.CTkLabel(btnrow, text="", font=FONT_SM, text_color="#888888")
+        self.schedule_lbl.pack(side="left", padx=(4, 0))
 
         self.status_lbl = ctk.CTkLabel(btnrow, text="Ready", font=FONT_SM, text_color="#888888")
         self.status_lbl.pack(side="right")
@@ -209,6 +226,7 @@ class LitesearchApp(ctk.CTk):
 
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.export_btn.configure(state="disabled")
         self.vram_slider.configure(state="disabled")
         self.status_lbl.configure(text="Training...", text_color="#4fc3f7")
 
@@ -252,8 +270,15 @@ class LitesearchApp(ctk.CTk):
         self.is_training = False
         self._update_vram()
         if self.result and not self.result.get('crashed'):
+            self.experiment_count += 1
             self._save_tsv(self.result)
+            self.export_btn.configure(state="normal")
             self.status_lbl.configure(text=f"Done  •  val_bpb {self.result['val_bpb']:.6f}", text_color="#69f0ae")
+            if self.export_after_n and self.experiment_count >= self.export_after_n:
+                self._do_export()
+                self.export_after_n = None
+                self.export_dir = None
+                self.schedule_lbl.configure(text="")
         else:
             self.status_lbl.configure(text="Crashed", text_color="#ff6b6b")
         self.start_btn.configure(state="normal")
@@ -291,6 +316,69 @@ class LitesearchApp(ctk.CTk):
             self._log(f"Logged to {RESULTS_FILE}\n")
         except Exception as e:
             self._log(f"Log error: {e}\n")
+
+    def _on_export(self):
+        path = filedialog.asksaveasfilename(defaultextension=".pth",
+                                                 filetypes=[("PyTorch model", "*.pth")],
+                                                 title="Export model")
+        if path:
+            from train import export_model
+            if export_model(self.result, path):
+                self._log(f"Exported to {path}\n")
+
+    def _do_export(self):
+        from datetime import datetime
+        from train import export_model
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(self.export_dir, f"litesearch_{ts}.pth")
+        if export_model(self.result, path):
+            self._log(f"Auto-exported to {path}\n")
+
+    def _open_schedule_dialog(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Schedule Export")
+        dlg.geometry("360x220")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        FONT = ctk.CTkFont(family="Consolas", size=12)
+
+        ctk.CTkLabel(dlg, text="Export after N experiments:", font=FONT).pack(padx=20, pady=(20, 4))
+        n_var = ctk.StringVar(value="5")
+        entry = ctk.CTkEntry(dlg, textvariable=n_var, width=80, justify="center")
+        entry.pack(pady=4)
+
+        ctk.CTkLabel(dlg, text="Export directory:", font=FONT).pack(pady=(12, 4))
+        dir_var = ctk.StringVar(value=os.path.join(os.getcwd(), "exports"))
+        dir_entry = ctk.CTkEntry(dlg, textvariable=dir_var, width=280)
+        dir_entry.pack(pady=4)
+
+        def browse():
+            d = filedialog.askdirectory(title="Choose export directory")
+            if d:
+                dir_var.set(d)
+
+        ctk.CTkButton(dlg, text="Browse", font=ctk.CTkFont(size=11), width=70, command=browse).pack(pady=2)
+
+        def apply():
+            try:
+                n = int(n_var.get())
+                d = dir_var.get()
+                if n > 0 and d:
+                    self.export_after_n = n
+                    self.export_dir = d
+                    os.makedirs(d, exist_ok=True)
+                    self.schedule_lbl.configure(text=f"Export after {n} runs", text_color="#4fc3f7")
+                    self._log(f"Schedule: export after {n} experiments to {d}\n")
+            except ValueError:
+                pass
+            dlg.destroy()
+
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=(16, 0))
+        ctk.CTkButton(btn_frame, text="Apply", width=80, command=apply).pack(side="left", padx=4)
+        ctk.CTkButton(btn_frame, text="Cancel", width=80, fg_color="#555555", hover_color="#333333",
+                       command=dlg.destroy).pack(side="left", padx=4)
 
     def _on_close(self):
         if self.is_training and self.stop_event:

@@ -1,7 +1,11 @@
 """
 Litesearch — pretraining script for consumer GPUs.
 Forked from Karpathy's autoresearch, optimized for 2GB–32GB+ VRAM.
-Usage: python train.py
+
+Usage:
+    python train.py                         # train for 5 minutes
+    python train.py --export model.pth      # train then export model
+    python train.py --export-dir exports/   # export to directory (auto-named)
 """
 
 import os
@@ -9,8 +13,10 @@ os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 import gc
+import json
 import math
 import time
+import argparse
 from dataclasses import dataclass, asdict
 
 import torch
@@ -756,9 +762,45 @@ def run_training(config=None, lr_override=None, log_queue=None, stop_event=None)
         'depth': depth,
         'n_embd': n_embd,
         'crashed': crashed,
+        'model': model,
+        'config': model_config,
+        'use_bf16': use_bf16,
     }
 
+
+def export_model(result, output_path):
+    if result['crashed']:
+        print("Cannot export crashed model")
+        return False
+    try:
+        torch.save({
+            'state_dict': result['model'].state_dict(),
+            'config': asdict(result['config']),
+            'use_bf16': result['use_bf16'],
+        }, output_path)
+        print(f"Saved to {output_path}")
+        return True
+    except Exception as e:
+        print(f"Export failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--export", type=str, default=None, help="Export model to path after training")
+    parser.add_argument("--export-dir", type=str, default=None, help="Export to directory with auto-named file")
+    args = parser.parse_args()
+
     result = run_training()
+
+    if args.export:
+        export_model(result, args.export)
+    elif args.export_dir:
+        os.makedirs(args.export_dir, exist_ok=True)
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(args.export_dir, f"litesearch_{ts}.pth")
+        export_model(result, path)
+
     if result['crashed']:
         exit(1)
