@@ -10,6 +10,9 @@ The idea: give an AI agent a small but real LLM training setup and let it experi
 - **Consumer GPU support**: Works on GTX 970 through RTX 4090+ (2GB–32GB+ VRAM)
 - **Auto VRAM scaling**: Model size, batch size, and sequence length automatically fit your GPU
 - **GUI dashboard**: CustomTkinter interface with live training log, VRAM bar, and config sliders
+- **Model export**: Save trained models as `.pth` files. Schedule auto-export after N experiments
+- **Try / Chat**: Generate text from your trained model with temperature and top-p controls
+- **Continue training**: Click Continue to train another 5 minutes from where you left off
 - **Pascal support**: Automatic fp32 fallback for GTX 10-series GPUs
 - **Gradient checkpointing**: Always enabled to minimize memory usage
 
@@ -66,8 +69,12 @@ uv run train.py
 **Controls:**
 - **VRAM slider**: Set your GPU's VRAM budget. The model auto-scales to fit, leaving 800MB for the OS.
 - **Matrix LR slider**: Override the Muon optimizer learning rate (default 0.04).
-- **Start**: Begins a training experiment with auto-computed config.
+- **Start**: Begins a new training experiment with auto-computed config.
+- **Continue**: Train another 5 minutes from the current model. Click as many times as you want.
 - **Stop**: Gracefully stops training after the current step.
+- **Export**: Save the trained model as a `.pth` file.
+- **Schedule**: Auto-export after N experiments complete.
+- **Try**: Open a popup to generate text from your trained model.
 
 ## VRAM Auto-Scaling
 
@@ -92,6 +99,10 @@ python train.py --export-dir exports/     # export to directory (auto-named)
 ```
 
 The GUI also has an "Export" button (after training) and "Schedule" button (auto-export after N experiments).
+
+Use the "Try" button to generate text from your trained model with adjustable temperature, max tokens, and top-p.
+
+Use "Continue" to keep training from the current model for another 5 minutes.
 
 ## Running the agent (headless)
 
@@ -123,7 +134,10 @@ pyproject.toml  — dependencies
 - **`kernels` dependency removed** — no custom CUDA kernel dependencies
 - **`customtkinter` added** — for the GUI dashboard
 - **`run_training()` function** — clean API for GUI integration
+- **`continue_training()`** — resume training from a previous model
+- **`generate()`** — text generation with temperature and top-p sampling
 - **`compute_optimal_config()`** — automatic model sizing based on VRAM budget
+- **`export_model()`** — save model weights + config as `.pth`
 
 ## Platform support
 
